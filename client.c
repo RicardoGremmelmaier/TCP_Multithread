@@ -14,7 +14,7 @@
  * O cliente deve ser capaz de abrir um chat simples com o servidor, onde o cliente pode enviar mensagens e o servidor responde.
  */
 
-
+//==================== INCLUDES ====================
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,10 +22,17 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <openssl/sha.h>
+#include <pthread.h>
 
+
+//================== CONFIGURAÇÕES ====================
 #define BUFFER_SIZE 1024
 #define HASH_SIZE 65
 
+
+//====================== FUNÇÕES AUXILIARES ======================
+
+// Função para calcular o hash SHA256 de um arquivo
 void calcula_sha256(const char *filename, char *output) {
     FILE *file = fopen(filename, "rb");
     if (!file) {
@@ -53,6 +60,7 @@ void calcula_sha256(const char *filename, char *output) {
     output[64] = '\0';
 }
 
+// Função para receber uma linha do socket, terminada por '\n'
 ssize_t recv_line(int sock, char *buffer, size_t maxlen) {
     size_t i = 0;
     char c;
@@ -65,6 +73,29 @@ ssize_t recv_line(int sock, char *buffer, size_t maxlen) {
     buffer[i] = '\0';
     return i;
 }
+
+//===================== FUNÇÃO DE THREAD =======================
+void *listen_server(void *arg) {
+    int sockfd = *(int *)arg;
+    char buffer[BUFFER_SIZE];
+    while (1) {
+        ssize_t bytes = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
+        if (bytes <= 0) {
+            printf("\n[SERVIDOR DESCONECTADO]\n");
+            exit(0);
+        }
+        buffer[bytes] = '\0';
+        if (strncmp(buffer, "[SERVIDOR]: ", 12) == 0) {
+            printf("\n%s\n", buffer);
+            printf(">> "); fflush(stdout); // retoma prompt do usuário
+        }
+    }
+    return NULL;
+}
+
+
+
+//====================== FUNÇÃO PRINCIPAL ======================
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -91,6 +122,10 @@ int main(int argc, char *argv[]) {
         exit(EXIT_FAILURE);
     }
 
+    pthread_t listen_thread;
+    pthread_create(&listen_thread, NULL, listen_server, &sockfd);
+    pthread_detach(listen_thread);
+
     while (1) {
         printf("Digite uma requisição GET [filename.ext] ou CHAT [mensagem] ou 'FIN' para encerrar: ");
         fgets(buffer, sizeof(buffer), stdin);
@@ -104,7 +139,7 @@ int main(int argc, char *argv[]) {
         
         if (strncmp(buffer, "CHAT ", 5) == 0) {
             send(sockfd, buffer, strlen(buffer), 0);
-            printf("Cliente: %s\n", buffer + 5);
+            printf("\nCliente: %s\n", buffer + 5);
             recv_line(sockfd, buffer, BUFFER_SIZE);
             printf("Servidor: %s\n", buffer);
             continue;

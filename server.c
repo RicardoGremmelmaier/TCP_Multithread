@@ -18,6 +18,7 @@
  * O servidor deve ser capaz de enviar uma mensagem para todos os clientes conectados, se necessário.
  */
 
+//==================== INCLUDES ====================
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,16 +27,57 @@
 #include <ifaddrs.h>
 #include <pthread.h>
 #include <openssl/sha.h>
+#include <signal.h>
+
+//================== CONFIGURAÇÕES ====================
 
 #define PORT 5555
 #define BUFFER_SIZE 1024
 #define HASH_SIZE 65
+#define MAX_CLIENTS 100
 
+//====================== VARIÁVEIS GLOBAIS ======================
+int client_sockets[MAX_CLIENTS];
+int client_count = 0;
+pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t stdin_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+
+//====================== STRUCTS ======================
 typedef struct {
     int sock;
     struct sockaddr_in addr;
 } client_info_t;
 
+//====================== FUNÇÕES AUXILIARES ======================
+
+// Função para imprimir o IP local do servidor
+void print_local_ip() {
+    struct ifaddrs *ifaddr, *ifa;
+    char ip[INET_ADDRSTRLEN];
+
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL)
+            continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET &&
+            strcmp(ifa->ifa_name, "eth0") == 0) {
+
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            inet_ntop(AF_INET, &(sa->sin_addr), ip, INET_ADDRSTRLEN);
+            printf("Servidor rodando no IP: %s:%d\n", ip, PORT);
+        }
+    }
+
+    freeifaddrs(ifaddr);
+}
+
+// Função para calcular o hash SHA256 de um arquivo
 void calcula_sha256(const char *filename, char *output) {
     printf("Calculando SHA256 para o arquivo: %s\n", filename);
     FILE *file = fopen(filename, "rb");
@@ -64,6 +106,18 @@ void calcula_sha256(const char *filename, char *output) {
     output[64] = '\0';
 }
 
+// Função para enviar uma mensagem para todos os clientes conectados
+void broadcast_to_clients(const char *msg) {
+    pthread_mutex_lock(&client_mutex);
+    for (int i = 0; i < client_count; i++) {
+        send(client_sockets[i], msg, strlen(msg), 0);
+    }
+    pthread_mutex_unlock(&client_mutex);
+}
+
+//=========================== FUNÇÃO DE THREAD ============================
+
+// Função para lidar com cada cliente conectado
 void *handle_client(void *arg) {
     client_info_t *client = (client_info_t *)arg;
     int client_sock = client->sock;
@@ -80,14 +134,15 @@ void *handle_client(void *arg) {
         buffer[bytes] = '\0';
 
         if (strcmp(buffer, "FIN") == 0) {
-            printf("[%s:%d] Cliente desconectou.\n", ip_str, port);
+            printf("\n[%s:%d] Cliente desconectou.\n", ip_str, port);
             close(client_sock);
             return NULL;
         }
 
         if (strncmp(buffer, "CHAT ", 5) == 0) {
             char *msg = buffer + 5;
-            printf("[%s:%d] Cliente: %s\n", ip_str, port, msg);
+            printf("\n[%s:%d] Cliente: %s\n", ip_str, port, msg);
+            pthread_mutex_lock(&stdin_mutex);
             printf("Envie uma mensagem de resposta:\n");
             fgets(buffer, sizeof(buffer), stdin);
             buffer[strcspn(buffer, "\n")] = 0;
@@ -95,12 +150,13 @@ void *handle_client(void *arg) {
             snprintf(resposta, sizeof(resposta), "%.*s\n", BUFFER_SIZE - 2, buffer);
             send(client_sock, resposta, strlen(resposta), 0);
             printf("Servidor: %s\n", buffer);
+            pthread_mutex_unlock(&stdin_mutex);
             continue;
         }
 
         if (strncmp(buffer, "GET ", 4) == 0) {
             char *filename = buffer + 4;
-            printf("[%s:%d] Requisição recebida: %s\n", ip_str, port, filename);
+            printf("\n[%s:%d] Requisição recebida: %s\n", ip_str, port, filename);
             char hash[HASH_SIZE];
             calcula_sha256(filename, hash);
             FILE *file = fopen(filename, "rb");
@@ -132,35 +188,52 @@ void *handle_client(void *arg) {
     }
 
     close(client_sock);
+
+    pthread_mutex_lock(&client_mutex);
+    for (int i = 0; i < client_count; i++) {
+        if (client_sockets[i] == client_sock) {
+            client_sockets[i] = client_sockets[client_count - 1];
+            client_count--;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&client_mutex);
+
     return NULL;
 }
 
-void print_local_ip() {
-    struct ifaddrs *ifaddr, *ifa;
-    char ip[INET_ADDRSTRLEN];
-
-    if (getifaddrs(&ifaddr) == -1) {
-        perror("getifaddrs");
-        return;
-    }
-
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
-        if (ifa->ifa_addr == NULL)
-            continue;
-
-        if (ifa->ifa_addr->sa_family == AF_INET &&
-            strcmp(ifa->ifa_name, "eth0") == 0) {
-
-            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
-            inet_ntop(AF_INET, &(sa->sin_addr), ip, INET_ADDRSTRLEN);
-            printf("Servidor rodando no IP: %s:%d\n", ip, PORT);
+// Função para gerenciar o chat do servidor
+void *server_chat_thread(void *arg) {
+    char buffer[BUFFER_SIZE];
+    char msg[BUFFER_SIZE];
+    while (1) {
+        printf("[SERVIDOR] > ");
+        fflush(stdout);
+        if (fgets(buffer, sizeof(buffer), stdin) != NULL) {
+            buffer[strcspn(buffer, "\n")] = 0;
+            
+            if (strcmp(buffer, "broadcast") == 0) {
+                pthread_mutex_lock(&stdin_mutex);
+                printf("Digite a mensagem para todos os clientes: ");
+                fflush(stdout);
+                if (fgets(msg, sizeof(msg), stdin) != NULL) {
+                    msg[strcspn(msg, "\n")] = 0;
+                    char full_msg[BUFFER_SIZE];
+                    snprintf(full_msg, sizeof(full_msg), "[SERVIDOR]: %.1010s\n", msg);
+                    broadcast_to_clients(full_msg);
+                    printf("Mensagem enviada a todos os clientes.\n");
+                }
+                pthread_mutex_unlock(&stdin_mutex);
+            }
         }
     }
-
-    freeifaddrs(ifaddr);
+    return NULL;
 }
 
+//=========================== FUNÇÃO PRINCIPAL ============================
+
 int main() {
+    signal(SIGPIPE, SIG_IGN);
     int sockfd;
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t cli_len = sizeof(cli_addr);
@@ -182,6 +255,9 @@ int main() {
 
     listen(sockfd, 5);
     print_local_ip();
+    
+    pthread_t chat_tid;
+    pthread_create(&chat_tid, NULL, server_chat_thread, NULL);
 
     while (1) {
         int client_sock = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len);
@@ -197,6 +273,13 @@ int main() {
         pthread_t tid;
         pthread_create(&tid, NULL, handle_client, info);
         pthread_detach(tid);
+
+        pthread_mutex_lock(&client_mutex);
+        if (client_count < MAX_CLIENTS) {
+            client_sockets[client_count++] = client_sock;
+        }
+        pthread_mutex_unlock(&client_mutex);
+
     }
 
     close(sockfd);
