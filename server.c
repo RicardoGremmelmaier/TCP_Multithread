@@ -42,7 +42,6 @@ int client_count = 0;
 pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t stdin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-
 //====================== STRUCTS ======================
 typedef struct {
     int sock;

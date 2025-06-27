@@ -24,11 +24,9 @@
 #include <openssl/sha.h>
 #include <pthread.h>
 
-
 //================== CONFIGURAÇÕES ====================
 #define BUFFER_SIZE 1024
 #define HASH_SIZE 65
-
 
 //====================== FUNÇÕES AUXILIARES ======================
 
@@ -79,15 +77,20 @@ void *listen_server(void *arg) {
     int sockfd = *(int *)arg;
     char buffer[BUFFER_SIZE];
     while (1) {
-        ssize_t bytes = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
+        ssize_t bytes = recv(sockfd, buffer, BUFFER_SIZE - 1, MSG_PEEK);
         if (bytes <= 0) {
             printf("\n[SERVIDOR DESCONECTADO]\n");
             exit(0);
         }
+
         buffer[bytes] = '\0';
-        if (strncmp(buffer, "[SERVIDOR]: ", 12) == 0) {
+        if (strncmp(buffer, "[SERVIDOR]:", 11) == 0) {
+            bytes = recv(sockfd, buffer, BUFFER_SIZE - 1, 0);
+            buffer[bytes] = '\0';
             printf("\n%s\n", buffer);
-            printf(">> "); fflush(stdout); // retoma prompt do usuário
+            printf(">> "); fflush(stdout);
+        } else {
+            sleep(1);
         }
     }
     return NULL;
