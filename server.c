@@ -23,41 +23,84 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <pthread.h>
+#include <openssl/sha.h>
 
 #define PORT 5555
 #define BUFFER_SIZE 1024
+#define HASH_SIZE 65
 
-void *handle_client(void *arg) {
+void calcula_sha256(const char *filename, char *output) {
+    printf("Calculando SHA256 para o arquivo: %s\n", filename);
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("Erro ao abrir arquivo para SHA");
+        strcpy(output, "ERRO");
+        return;
+    }
+
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+
+    unsigned char buffer[BUFFER_SIZE];
+    size_t bytes;
+    while ((bytes = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        SHA256_Update(&sha256, buffer, bytes);
+    }
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_Final(hash, &sha256);
+    fclose(file);
+
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        sprintf(output + (i * 2), "%02x", hash[i]);
+    }
+    output[64] = '\0';
+}
+
+    void *handle_client(void *arg) {
     int client_sock = *(int *)arg;
     free(arg);
-
-    char buffer[BUFFER_SIZE];
     ssize_t bytes;
-
+    
+    char buffer[BUFFER_SIZE];
     while ((bytes = recv(client_sock, buffer, BUFFER_SIZE - 1, 0)) > 0) {
         buffer[bytes] = '\0';
-
+    
         if (strcmp(buffer, "FIN") == 0) {
             printf("Cliente desconectou.\n");
-            break;
+            close(client_sock);
+            return NULL;
         }
-
+        
         if (strncmp(buffer, "GET ", 4) == 0) {
             char *filename = buffer + 4;
+            printf("Requisição recebida: %s\n", filename);
+            char hash[HASH_SIZE];
+            calcula_sha256(filename, hash);
             FILE *file = fopen(filename, "rb");
             if (!file) {
-                perror("Erro ao abrir arquivo");
-                send(client_sock, "ERROR: Arquivo não encontrado", 30, 0);
-                continue;
+                send(client_sock, "ERROR: Arquivo não encontrado\n", 31, 0);
+                close(client_sock);
+                return NULL;
             }
+
+            send(client_sock, "OK\n", 3, 0);
+
+            fseek(file, 0, SEEK_END);
+            long filesize = ftell(file);
+            fseek(file, 0, SEEK_SET);
+
+            sprintf(buffer, "SIZE %ld\n", filesize);
+            send(client_sock, buffer, strlen(buffer), 0);
 
             while ((bytes = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
                 send(client_sock, buffer, bytes, 0);
             }
             fclose(file);
 
-            send(client_sock, "EOF", 3, 0);
-            printf("Arquivo '%s' enviado.\n", filename);
+            sprintf(buffer, "HASH %s\n", hash);
+            send(client_sock, buffer, strlen(buffer), 0);
+            printf("Enviando arquivo e hash\n");
         } else {
             printf("Comando desconhecido: %s\n", buffer);
         }

@@ -21,8 +21,50 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <openssl/sha.h>
 
 #define BUFFER_SIZE 1024
+#define HASH_SIZE 65
+
+void calcula_sha256(const char *filename, char *output) {
+    FILE *file = fopen(filename, "rb");
+    if (!file) {
+        perror("Erro ao abrir arquivo para SHA");
+        strcpy(output, "ERRO");
+        return;
+    }
+
+    SHA256_CTX sha256;
+    SHA256_Init(&sha256);
+
+    unsigned char buffer[BUFFER_SIZE];
+    size_t bytes;
+    while ((bytes = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
+        SHA256_Update(&sha256, buffer, bytes);
+    }
+
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256_Final(hash, &sha256);
+    fclose(file);
+
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; i++) {
+        sprintf(output + (i * 2), "%02x", hash[i]);
+    }
+    output[64] = '\0';
+}
+
+ssize_t recv_line(int sock, char *buffer, size_t maxlen) {
+    size_t i = 0;
+    char c;
+    while (i < maxlen - 1) {
+        ssize_t n = recv(sock, &c, 1, 0);
+        if (n <= 0) return n;
+        if (c == '\n') break;
+        buffer[i++] = c;
+    }
+    buffer[i] = '\0';
+    return i;
+}
 
 int main(int argc, char *argv[]) {
     if (argc != 3) {
@@ -67,7 +109,7 @@ int main(int argc, char *argv[]) {
 
         char *filename = buffer + 4;
         char output_filename[256];
-        snprintf(output_filename, sizeof(output_filename), "%s_recebido", filename);
+        snprintf(output_filename, sizeof(output_filename), "recebido_%s", filename);
         FILE *output = fopen(output_filename, "wb");
         if (!output) {
             perror("Erro ao criar arquivo de saída");
@@ -85,8 +127,30 @@ int main(int argc, char *argv[]) {
 
         fclose(output);
         printf("Arquivo salvo como '%s'.\n", output_filename);
-    }
+        
+        if (strncmp(buffer, "HASH ", 5) != 0) {
+        recv_line(sockfd, buffer, BUFFER_SIZE);
+        }
+        if (strncmp(buffer, "HASH ", 5) != 0) {
+            printf("Hash inválido recebido: %s\n", buffer);
+            continue;
+        }
 
+        char *hash_servidor = buffer + 5;
+        char hash_local[HASH_SIZE];
+        calcula_sha256(output_filename, hash_local);
+
+        printf("Hash recebido: %s\n", hash_servidor);
+        printf("Hash local   : %s\n", hash_local);
+
+        if (strcmp(hash_servidor, hash_local) == 0) {
+            printf("Integridade verificada com sucesso.\n");
+        } else {
+            printf("Arquivo corrompido!\n");
+            remove(output_filename);
+            printf("Arquivo '%s' removido.\n", output_filename);
+        }
+    }
     close(sockfd);
     return 0;
 }
