@@ -92,7 +92,7 @@ int main(int argc, char *argv[]) {
     }
 
     while (1) {
-        printf("Digite uma requisição GET filename.ext (ou 'FIN' para encerrar): ");
+        printf("Digite uma requisição GET [filename.ext] ou CHAT [mensagem] ou 'FIN' para encerrar: ");
         fgets(buffer, sizeof(buffer), stdin);
         buffer[strcspn(buffer, "\n")] = 0;
 
@@ -100,6 +100,14 @@ int main(int argc, char *argv[]) {
             send(sockfd, buffer, strlen(buffer), 0);
             printf("Conexão encerrada pelo cliente.\n");
             break;
+        }
+        
+        if (strncmp(buffer, "CHAT ", 5) == 0) {
+            send(sockfd, buffer, strlen(buffer), 0);
+            printf("Cliente: %s\n", buffer + 5);
+            recv_line(sockfd, buffer, BUFFER_SIZE);
+            printf("Servidor: %s\n", buffer);
+            continue;
         }
 
         if (strncmp(buffer, "GET ", 4) != 0) {

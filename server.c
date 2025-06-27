@@ -57,7 +57,7 @@ void calcula_sha256(const char *filename, char *output) {
     output[64] = '\0';
 }
 
-    void *handle_client(void *arg) {
+void *handle_client(void *arg) {
     int client_sock = *(int *)arg;
     free(arg);
     ssize_t bytes;
@@ -70,6 +70,16 @@ void calcula_sha256(const char *filename, char *output) {
             printf("Cliente desconectou.\n");
             close(client_sock);
             return NULL;
+        }
+
+        if (strncmp(buffer, "CHAT ", 5) == 0) {
+            char *msg = buffer + 5;
+            printf("Cliente: %s\n", msg);
+            printf("Envie uma mensagem de resposta:\n");
+            fgets(buffer, sizeof(buffer), stdin);
+            send(client_sock, buffer, strlen(buffer), 0);
+            printf("Servidor: %s\n", buffer);
+            continue;
         }
         
         if (strncmp(buffer, "GET ", 4) == 0) {
