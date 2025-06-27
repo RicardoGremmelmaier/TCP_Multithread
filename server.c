@@ -39,6 +39,7 @@
 //====================== VARIÁVEIS GLOBAIS ======================
 int client_sockets[MAX_CLIENTS];
 int client_count = 0;
+volatile int stdin_occupied = 0;
 pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t stdin_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -141,15 +142,32 @@ void *handle_client(void *arg) {
         if (strncmp(buffer, "CHAT ", 5) == 0) {
             char *msg = buffer + 5;
             printf("\n[%s:%d] Cliente: %s\n", ip_str, port, msg);
+
+            stdin_occupied = 1;
             pthread_mutex_lock(&stdin_mutex);
+
+            int ch;
+            while ((ch = getchar()) != '\n' && ch != EOF);
+
             printf("Envie uma mensagem de resposta:\n");
-            fgets(buffer, sizeof(buffer), stdin);
-            buffer[strcspn(buffer, "\n")] = 0;
+
             char resposta[BUFFER_SIZE];
-            snprintf(resposta, sizeof(resposta), "%.*s\n", BUFFER_SIZE - 2, buffer);
-            send(client_sock, resposta, strlen(resposta), 0);
-            printf("Servidor: %s\n", buffer);
+            if (fgets(resposta, sizeof(resposta), stdin) != NULL) {
+                resposta[strcspn(resposta, "\n")] = 0;
+
+                if (strlen(resposta) > 0) {
+                    char resposta_formatada[BUFFER_SIZE];
+                    snprintf(resposta_formatada, sizeof(resposta_formatada), "%.*s\n", BUFFER_SIZE - 2, resposta);
+                    send(client_sock, resposta_formatada, strlen(resposta_formatada), 0);
+                    printf("Servidor: %s\n", resposta);
+                } else {
+                    printf("Resposta vazia, nada foi enviado.\n");
+                }
+            }
+
             pthread_mutex_unlock(&stdin_mutex);
+            stdin_occupied = 0;
+
             continue;
         }
 
@@ -206,6 +224,7 @@ void *server_chat_thread(void *arg) {
     char buffer[BUFFER_SIZE];
     char msg[BUFFER_SIZE];
     while (1) {
+        if (stdin_occupied) {sleep(1); continue;}
         printf("[SERVIDOR] > ");
         fflush(stdout);
         if (fgets(buffer, sizeof(buffer), stdin) != NULL) {
