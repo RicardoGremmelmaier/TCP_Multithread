@@ -13,7 +13,9 @@
  * O servidor deve ser capaz de lidar com múltiplos clientes simultaneamente.
  * O servidor deve ser capaz de lidar com mensagens de erro e retornar mensagens apropriadas ao cliente.
  * O servidor deve ser capaz de lidar com mensagens de controle, como "sair" ou "desconectar", e encerrar a conexão com o cliente.
- * O servidor deve ser capaz de abrir um chat simples com o cliente, onde o cliente pode enviar mensagens e o servidor responde.
+ * O servidor deve ser capaz de responder um chat simples com o cliente, onde o cliente pode enviar mensagens e o servidor responde.
+ * O servidor deve ser capaz de calcular o hash SHA256 do arquivo solicitado e enviar o hash ao cliente.
+ * O servidor deve ser capaz de enviar uma mensagem para todos os clientes conectados, se necessário.
  */
 
 #include <stdio.h>
@@ -28,6 +30,11 @@
 #define PORT 5555
 #define BUFFER_SIZE 1024
 #define HASH_SIZE 65
+
+typedef struct {
+    int sock;
+    struct sockaddr_in addr;
+} client_info_t;
 
 void calcula_sha256(const char *filename, char *output) {
     printf("Calculando SHA256 para o arquivo: %s\n", filename);
@@ -58,40 +65,48 @@ void calcula_sha256(const char *filename, char *output) {
 }
 
 void *handle_client(void *arg) {
-    int client_sock = *(int *)arg;
-    free(arg);
-    ssize_t bytes;
-    
+    client_info_t *client = (client_info_t *)arg;
+    int client_sock = client->sock;
+    struct sockaddr_in addr = client->addr;
+    free(client);
+
+    char ip_str[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &(addr.sin_addr), ip_str, sizeof(ip_str));
+    int port = ntohs(addr.sin_port);
+
     char buffer[BUFFER_SIZE];
+    ssize_t bytes;
     while ((bytes = recv(client_sock, buffer, BUFFER_SIZE - 1, 0)) > 0) {
         buffer[bytes] = '\0';
-    
+
         if (strcmp(buffer, "FIN") == 0) {
-            printf("Cliente desconectou.\n");
+            printf("[%s:%d] Cliente desconectou.\n", ip_str, port);
             close(client_sock);
             return NULL;
         }
 
         if (strncmp(buffer, "CHAT ", 5) == 0) {
             char *msg = buffer + 5;
-            printf("Cliente: %s\n", msg);
+            printf("[%s:%d] Cliente: %s\n", ip_str, port, msg);
             printf("Envie uma mensagem de resposta:\n");
             fgets(buffer, sizeof(buffer), stdin);
-            send(client_sock, buffer, strlen(buffer), 0);
+            buffer[strcspn(buffer, "\n")] = 0;
+            char resposta[BUFFER_SIZE];
+            snprintf(resposta, sizeof(resposta), "%.*s\n", BUFFER_SIZE - 2, buffer);
+            send(client_sock, resposta, strlen(resposta), 0);
             printf("Servidor: %s\n", buffer);
             continue;
         }
-        
+
         if (strncmp(buffer, "GET ", 4) == 0) {
             char *filename = buffer + 4;
-            printf("Requisição recebida: %s\n", filename);
+            printf("[%s:%d] Requisição recebida: %s\n", ip_str, port, filename);
             char hash[HASH_SIZE];
             calcula_sha256(filename, hash);
             FILE *file = fopen(filename, "rb");
             if (!file) {
                 send(client_sock, "ERROR: Arquivo não encontrado\n", 31, 0);
-                close(client_sock);
-                return NULL;
+                continue;
             }
 
             send(client_sock, "OK\n", 3, 0);
@@ -110,9 +125,9 @@ void *handle_client(void *arg) {
 
             sprintf(buffer, "HASH %s\n", hash);
             send(client_sock, buffer, strlen(buffer), 0);
-            printf("Enviando arquivo e hash\n");
+            printf("[%s:%d] Enviando arquivo e hash\n", ip_str, port);
         } else {
-            printf("Comando desconhecido: %s\n", buffer);
+            printf("[%s:%d] Comando desconhecido: %s\n", ip_str, port, buffer);
         }
     }
 
@@ -146,7 +161,7 @@ void print_local_ip() {
 }
 
 int main() {
-    int sockfd, *client_sock;
+    int sockfd;
     struct sockaddr_in serv_addr, cli_addr;
     socklen_t cli_len = sizeof(cli_addr);
 
@@ -169,16 +184,18 @@ int main() {
     print_local_ip();
 
     while (1) {
-        client_sock = malloc(sizeof(int));
-        *client_sock = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len);
-        if (*client_sock < 0) {
+        int client_sock = accept(sockfd, (struct sockaddr *)&cli_addr, &cli_len);
+        if (client_sock < 0) {
             perror("Erro no accept");
-            free(client_sock);
             continue;
         }
 
+        client_info_t *info = malloc(sizeof(client_info_t));
+        info->sock = client_sock;
+        info->addr = cli_addr;
+
         pthread_t tid;
-        pthread_create(&tid, NULL, handle_client, client_sock);
+        pthread_create(&tid, NULL, handle_client, info);
         pthread_detach(tid);
     }
 
