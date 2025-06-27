@@ -21,6 +21,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
 #include <pthread.h>
 
 #define PORT 5555
@@ -66,6 +67,31 @@ void *handle_client(void *arg) {
     return NULL;
 }
 
+void print_local_ip() {
+    struct ifaddrs *ifaddr, *ifa;
+    char ip[INET_ADDRSTRLEN];
+
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL)
+            continue;
+
+        if (ifa->ifa_addr->sa_family == AF_INET &&
+            strcmp(ifa->ifa_name, "eth0") == 0) {
+
+            struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+            inet_ntop(AF_INET, &(sa->sin_addr), ip, INET_ADDRSTRLEN);
+            printf("Servidor rodando no IP: %s:%d\n", ip, PORT);
+        }
+    }
+
+    freeifaddrs(ifaddr);
+}
+
 int main() {
     int sockfd, *client_sock;
     struct sockaddr_in serv_addr, cli_addr;
@@ -87,7 +113,7 @@ int main() {
     }
 
     listen(sockfd, 5);
-    printf("Servidor escutando na porta %d...\n", PORT);
+    print_local_ip();
 
     while (1) {
         client_sock = malloc(sizeof(int));
