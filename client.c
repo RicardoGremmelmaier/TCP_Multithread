@@ -118,11 +118,40 @@ int main(int argc, char *argv[]) {
 
         send(sockfd, buffer, strlen(buffer), 0);
 
-        ssize_t bytes;
-        while ((bytes = recv(sockfd, buffer, BUFFER_SIZE, 0)) > 0) {
-            if (strncmp(buffer, "EOF", 3) == 0) break;
-            fwrite(buffer, 1, bytes, output);
-            if (bytes < BUFFER_SIZE) break;
+        recv_line(sockfd, buffer, BUFFER_SIZE);
+        if (strncmp(buffer, "ERROR", 5) == 0) {
+            printf("Erro do servidor: %s\n", buffer);
+            fclose(output);
+            remove(output_filename);
+            continue;
+        }
+
+        recv_line(sockfd, buffer, BUFFER_SIZE);
+        if (strncmp(buffer, "SIZE ", 5) != 0) {
+            printf("Resposta inválida do servidor: %s\n", buffer);
+            fclose(output);
+            remove(output_filename);
+            continue;
+        }
+
+        long filesize = atol(buffer + 5);
+        long received = 0;
+        char file_buffer[BUFFER_SIZE];
+        while (received < filesize) {
+            ssize_t bytes = recv(sockfd, file_buffer, BUFFER_SIZE, 0);
+            if (bytes <= 0) break;
+
+            size_t to_write = (received + bytes <= filesize) ? bytes : (filesize - received);
+            fwrite(file_buffer, 1, to_write, output);
+            received += to_write;
+
+            if (received == filesize && bytes > to_write) { 
+                size_t sobra = bytes - to_write;
+                memmove(buffer, file_buffer + to_write, sobra);
+                buffer[sobra] = '\0';
+            } else {
+                buffer[0] = '\0';
+            }
         }
 
         fclose(output);
@@ -137,6 +166,7 @@ int main(int argc, char *argv[]) {
         }
 
         char *hash_servidor = buffer + 5;
+        hash_servidor[strcspn(hash_servidor, "\r\n")] = '\0';
         char hash_local[HASH_SIZE];
         calcula_sha256(output_filename, hash_local);
 
